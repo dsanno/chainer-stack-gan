@@ -124,8 +124,10 @@ def main():
 
     optimizer_gen = optimizers.Adam(alpha=0.0002, beta1=0.5)
     optimizer_gen.setup(gen)
+    optimizer_gen.add_hook(chainer.optimizer.WeightDecay(0.00001))
     optimizer_dis = optimizers.Adam(alpha=0.0002, beta1=0.5)
     optimizer_dis.setup(dis)
+    optimizer_dis.add_hook(chainer.optimizer.WeightDecay(0.00001))
 
     if args.input != None:
         serializers.load_npz(args.input + '.gen.model', gen)
