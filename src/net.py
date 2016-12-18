@@ -126,11 +126,11 @@ class Discriminator1(chainer.Chain):
 
 class Generator2(chainer.Chain):
     def __init__(self):
-        super(Generator1, self).__init__(
+        super(Generator2, self).__init__(
             down=DownSampling(64, 3, 16, 512),
             block1=ResidualBlock(512),
             block2=ResidualBlock(512),
-            up=UpSampling(16, 512, 256),
+            up=UpSampling(16, 512, 128),
         )
 
     def __call__(self, x, train=True):
@@ -143,7 +143,7 @@ class Generator2(chainer.Chain):
 class Discriminator2(chainer.Chain):
     def __init__(self):
         initialW = chainer.initializers.Normal(0.02)
-        super(Discriminator1. self).__init__(
+        super(Discriminator2, self).__init__(
             down=DownSampling(128, 3, 4, 1024),
             fc=L.Linear(1024 * 4 * 4, 1, initialW=initialW),
         )
