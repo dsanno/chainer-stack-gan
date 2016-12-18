@@ -121,8 +121,9 @@ class Discriminator1(chainer.Chain):
 
     def __call__(self, x, train=True):
         h = self.down(x, train)
-        h = self.fc(h)
-        return h
+        h = F.reshape(h, (h.shape[0], -1))
+        dis = self.fc(h)
+        return dis, h
 
 class Generator2(chainer.Chain):
     def __init__(self):

@@ -14,7 +14,6 @@ import chainer.links as L
 import net
 
 
-import sys
 latent_size = 100
 image_size = 128
 
@@ -30,6 +29,7 @@ def parse_args():
     parser.add_argument('--save-epoch', default=1, type=int, help='number of epochs for saving intervals')
     parser.add_argument('--lr-decay', default=10, type=int, help='number of epochs for learning rate decay')
     parser.add_argument('--out-image-dir', default=None, type=str, help='output directory to output images')
+    parser.add_argument('--clip-rect', default=None, type=str, help='clip rect: left,top,width,height')
     return parser.parse_args()
 
 def update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch):
@@ -63,11 +63,11 @@ def update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch):
 
     return loss_gen_data, float(loss_dis.data)
 
-def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=10, save_epoch=1, batch_size=64, out_image_dir=None):
+def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=10, save_epoch=1, batch_size=64, out_image_dir=None, clip_rect=None):
     xp = gen1.xp
     out_image_row_num = 10
     out_image_col_num = 10
-    z_out_image =  chainer.Variable(xp.random.uniform(-1, 1, (out_image_row_num * out_image_col_num, latent_size)).astype(np.float32), volatile=True)
+    z_out_image =  xp.random.normal(0, 1, (out_image_row_num * out_image_col_num, latent_size)).astype(np.float32)
     x_batch = np.zeros((batch_size, 3, image_size, image_size), dtype=np.float32)
     iterator = chainer.iterators.SerialIterator(images, batch_size)
     sum_loss_gen = 0
@@ -75,19 +75,14 @@ def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, outp
     num_loss = 0
     last_clock = time.clock()
     for batch_images in iterator:
-        w = 128
-        h = 128
         for j, image in enumerate(batch_images):
-            offset_x = np.random.randint(8) + 21
-            offset_y = np.random.randint(8) + 51
-            mirror = np.random.randint(2)
             with io.BytesIO(image) as b:
-                pixels = np.asarray(Image.open(b).convert('RGB').crop((offset_x, offset_y, offset_x + w, offset_y + h)).resize((image_size, image_size)))
-                pixels = pixels.astype(np.float32).transpose((2, 0, 1))
-                if mirror == 1:
-                    x_batch[j,...] = pixels[:,:,::-1] / 127.5 - 1
-                else:
-                    x_batch[j,...] = pixels / 127.5 - 1
+                pixels = Image.open(b).convert('RGB')
+                if clip_rect is not None:
+                    pixels = pixels.crop(clip_rect)
+                pixels = np.asarray(pixels.resize((image_size, image_size)), dtype=np.float32)
+                pixels = pixels.transpose((2, 0, 1))
+                x_batch[j,...] = pixels / 127.5 - 1
         loss_gen, loss_dis = update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch)
         sum_loss_gen += loss_gen
         sum_loss_dis += loss_dis
@@ -107,9 +102,14 @@ def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, outp
                 optimizer_dis.alpha *= 0.5
             if iterator.epoch % save_epoch == 0:
                 if out_image_dir is not None:
-                    image = gen2(gen1(z_out_image, train=False), train=False).data
-                    image = ((cuda.to_cpu(image) + 1) * 127.5)
-                    image = image.clip(0, 255).astype(np.uint8)
+                    image = np.zeros((out_image_row_num * out_image_col_num, 3, image_size, image_size), dtype=np.uint8)
+                    for i in six.moves.range(out_image_row_num):
+                        with chainer.no_backprop_mode():
+                            begin_index = i * out_image_col_num
+                            end_index = (i + 1) * out_image_col_num
+                            sub_image = gen2(gen1(z_out_image[begin_index:end_index], train=False), train=False).data
+                            sub_image = ((cuda.to_cpu(sub_image) + 1) * 127.5)
+                            image[begin_index:end_index, ...] = sub_image.clip(0, 255).astype(np.uint8)
                     image = image.reshape(out_image_row_num, out_image_col_num, 3, image_size, image_size)
                     image = image.transpose((0, 3, 1, 4, 2))
                     image = image.reshape((out_image_row_num * image_size, out_image_col_num * image_size, 3))
@@ -124,8 +124,12 @@ def main():
     gen1 = net.Generator1()
     gen2 = net.Generator2()
     dis = net.Discriminator2()
+    clip_rect = None
+    if args.clip_rect:
+        clip_rect = map(int, args.clip_rect.split(','))
+        clip_rect = tuple([clip_rect[0], clip_rect[1], clip_rect[0] + clip_rect[2], clip_rect[1] + clip_rect[3]])
 
-    gpu_device = None
+    device_id = None
     if args.gpu >= 0:
         device_id = args.gpu
         cuda.get_device(device_id).use()
@@ -161,7 +165,7 @@ def main():
     with open(args.dataset, 'rb') as f:
         images = pickle.load(f)
 
-    train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, args.epoch, batch_size=args.batch_size, save_epoch=args.save_epoch, lr_decay=args.lr_decay, output_path=args.output, out_image_dir=args.out_image_dir)
+    train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, args.epoch, batch_size=args.batch_size, save_epoch=args.save_epoch, lr_decay=args.lr_decay, output_path=args.output, out_image_dir=args.out_image_dir, clip_rect=clip_rect)
 
 if __name__ == '__main__':
     main()
