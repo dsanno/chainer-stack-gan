@@ -33,8 +33,8 @@ class UpSamplingBlock(chainer.Chain):
         self.activate = activate
 
     def __call__(self, x, train=True):
-        b, c, h, w = x.shape
-        h = self.conv(F.unpooling_2d(x, 2, outsize=(h * 2, w * 2)))
+        b, c, height, width = x.shape
+        h = self.conv(F.unpooling_2d(x, 2, outsize=(height * 2, width * 2)))
         if self.activate:
             h = F.relu(self.bn(h, test=not train))
         return h
@@ -109,21 +109,20 @@ class Generator1(chainer.Chain):
     def __call__(self, x, train=True):
         h = F.reshape(x, x.shape + (1, 1))
         h = F.relu(self.bn1(self.conv1(h), test=not train))
-        return self.up(h)
+        return self.up(h, train)
 
 class Discriminator1(chainer.Chain):
     def __init__(self):
         initialW = chainer.initializers.Normal(0.02)
         super(Discriminator1, self).__init__(
-            down=DownSampling(64, 3, 4, 1024),
-            fc=L.Linear(1024 * 4 * 4, 1, initialW=initialW),
+            enc=DownSampling(64, 3, 4, 512),
+            dec=UpSampling(4, 512, 64),
         )
 
     def __call__(self, x, train=True):
-        h = self.down(x, train)
-        h = F.reshape(h, (h.shape[0], -1))
-        dis = self.fc(h)
-        return dis, h
+        h = self.enc(x, train)
+        y = self.dec(h, train)
+        return y, h
 
 class Generator2(chainer.Chain):
     def __init__(self):
@@ -145,11 +144,11 @@ class Discriminator2(chainer.Chain):
     def __init__(self):
         initialW = chainer.initializers.Normal(0.02)
         super(Discriminator2, self).__init__(
-            down=DownSampling(128, 3, 4, 1024),
-            fc=L.Linear(1024 * 4 * 4, 1, initialW=initialW),
+            enc=DownSampling(128, 3, 4, 512),
+            dec=UpSampling(4, 512, 128),
         )
 
     def __call__(self, x, train=True):
-        h = self.down(x, train)
-        h = self.fc(h)
-        return h
+        h = self.enc(x, train)
+        y = self.dec(h, train)
+        return y, h
