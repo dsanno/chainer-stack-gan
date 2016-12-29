@@ -47,7 +47,7 @@ Example:
 $ python src/generate2.py model/stage1_050.gen.model model\stage2_050.gen.model image\generated -g 0
 ```
 
-# Differences from oritinal paper
+# Differences from original paper
 
 * Text to image synthesis is not implemented.  
 Input of generator is 100-dimension latent vector.
