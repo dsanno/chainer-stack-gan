@@ -18,7 +18,7 @@ latent_size = 100
 image_size = 64
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Stack-1 GAN trainer')
+    parser = argparse.ArgumentParser(description='Stage-1 GAN trainer')
     parser.add_argument('--dataset', '-d', default='dataset/images.pkl', type=str, help='dataset file path')
     parser.add_argument('--gpu', '-g', default=-1, type=int, help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--batch-size', '-b', default=64, type=int, help='batch size')
