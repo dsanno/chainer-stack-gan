@@ -66,10 +66,11 @@ def main():
         out_vector_path = '{}.npy'.format(args.output)
 
 
-    if device_id is not None:
-        z = cuda.to_gpu(z, device_id)
     with chainer.no_backprop_mode():
-        x1 = gen1(z, train=False)
+        if device_id is None:
+            x1 = gen1(z, train=False)
+        else:
+            x1 = gen1(cuda.to_gpu(z, device_id), train=False)
         x2 = gen2(x1, train=False)
     x1 = cuda.to_cpu(x1.data)
     x2 = cuda.to_cpu(x2.data)
