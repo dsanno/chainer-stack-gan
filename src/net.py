@@ -97,6 +97,26 @@ class DownSampling(chainer.Chain):
             h = link(h, train)
         return h
 
+class MinibatchDiscriminator(chainer.Chain):
+    def __init__(self, in_size, knum=50, ksize=5):
+        super(MinibatchDiscriminator, self).__init__(
+            trans=L.Linear(in_size, knum * ksize, nobias=True)
+        )
+        self.knum = knum
+        self.ksize = ksize
+
+    def __call__(self, x):
+        x_flat = F.reshape(x, (x.shape[0], -1))
+        m = F.reshape(self.trans(x_flat), (-1, self.knum, self.ksize))
+        m = F.expand_dims(m, 3)
+        m_t = F.transpose(m, (3, 1, 2, 0))
+        m, m_t = F.broadcast(m, m_t)
+
+        norm = F.sum(abs(m - m_t), axis=2)
+        c_b = F.exp(-norm)
+        o_b = F.sum(c_b, axis=2)
+        return F.concat((x_flat, o_b), axis=1)
+
 class Generator1(chainer.Chain):
     def __init__(self):
         initialW = chainer.initializers.Normal(0.02)
@@ -109,20 +129,23 @@ class Generator1(chainer.Chain):
     def __call__(self, x, train=True):
         h = F.reshape(x, x.shape + (1, 1))
         h = F.relu(self.bn1(self.conv1(h), test=not train))
-        return self.up(h, train)
+        h = self.up(h, train)
+        return F.tanh(h)
 
 class Discriminator1(chainer.Chain):
     def __init__(self):
         initialW = chainer.initializers.Normal(0.02)
         super(Discriminator1, self).__init__(
-            enc=DownSampling(64, 3, 4, 512),
-            dec=UpSampling(4, 512, 64),
+            down=DownSampling(64, 3, 4, 1024),
+            bdis=MinibatchDiscriminator(4 * 4 * 1024, 50, 5),
+            fc=L.Linear(4 * 4 * 1024 + 50, 1, initialW=initialW),
         )
 
     def __call__(self, x, train=True):
-        h = self.enc(x, train)
-        y = self.dec(h, train)
-        return y, h
+        h = self.down(x, train)
+        h = self.bdis(h)
+        y = self.fc(h)
+        return y
 
 class Generator2(chainer.Chain):
     def __init__(self):
@@ -138,17 +161,19 @@ class Generator2(chainer.Chain):
         h = self.block1(h, train)
         h = self.block2(h, train)
         h = self.up(h, train)
-        return h
+        return F.tanh(h)
 
 class Discriminator2(chainer.Chain):
     def __init__(self):
         initialW = chainer.initializers.Normal(0.02)
         super(Discriminator2, self).__init__(
-            enc=DownSampling(128, 3, 4, 512),
-            dec=UpSampling(4, 512, 128),
+            down=DownSampling(128, 3, 4, 1024),
+            bdis=MinibatchDiscriminator(4 * 4 * 1024, 50, 5),
+            fc=L.Linear(4 * 4 * 1024 + 50, 1, initialW=initialW),
         )
 
     def __call__(self, x, train=True):
-        h = self.enc(x, train)
-        y = self.dec(h, train)
-        return y, h
+        h = self.down(x, train)
+        h = self.bdis(h)
+        y = self.fc(h)
+        return y

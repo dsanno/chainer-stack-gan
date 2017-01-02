@@ -23,7 +23,6 @@ def parse_args():
     parser.add_argument('--dataset', '-d', default='dataset/images.pkl', type=str, help='dataset file path')
     parser.add_argument('--gpu', '-g', default=-1, type=int, help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--batch-size', '-b', default=64, type=int, help='batch size')
-    parser.add_argument('--margin', '-m', default=40, type=float, help='margin of loss function')
     parser.add_argument('--input', '-i', default=None, type=str, help='Stack-II input model file path without extension')
     parser.add_argument('--output', '-o', required=True, type=str, help='output model file path without extension')
     parser.add_argument('--epoch', '-e', default=50, type=int, help='number of epochs')
@@ -33,56 +32,51 @@ def parse_args():
     parser.add_argument('--clip-rect', default=None, type=str, help='clip rect: left,top,width,height')
     return parser.parse_args()
 
-def update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch, margin):
+def update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=False):
     xp = gen1.xp
     batch_size = len(x_batch)
 
     # from generated image
-    z = xp.random.normal(0, 1, (batch_size, latent_size)).astype(np.float32)
-    z = z / (xp.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
+    z = xp.random.uniform(-1, 1, (batch_size, latent_size)).astype(np.float32)
     x_stack1 = gen1(Variable(z, volatile=True), train=False)
     x_gen = gen2(x_stack1.data)
     total_size = np.prod(x_gen.shape)
     del z
     del x_stack1
-    y_gen, h_gen = dis(x_gen)
-    h_gen = F.normalize(F.reshape(h_gen, (batch_size, -1)))
-    similarity = F.sum(F.matmul(h_gen, h_gen, transb=True)) / (batch_size * batch_size)
-    del h_gen
-    loss_gen = F.mean_squared_error(x_gen, y_gen) + 0.1 * similarity
-    loss_dis = F.sum(F.relu(margin * margin - F.batch_l2_norm_squared(x_gen - y_gen))) / total_size
-    del x_gen
-    del y_gen
-    del similarity
-    # from real image
-    x = xp.asarray(x_batch)
-    y, h = dis(x)
-    loss_dis += F.mean_squared_error(x, y)
+    y_gen = dis(x_gen)
+    loss_gen = F.sigmoid_cross_entropy(y_gen, xp.zeros_like(y_gen.data, dtype=np.int32))
 
     gen2.cleargrads()
     loss_gen.backward()
     optimizer_gen.update()
-    loss_gen_data = float(loss_gen.data)
-    del loss_gen
+
+    if only_update_gen:
+        return float(loss_gen.data), 0
+
+    # from real image
+    x = xp.asarray(x_batch)
+    y = dis(x)
+    loss_dis = F.sigmoid_cross_entropy(y_gen, xp.ones_like(y_gen.data, dtype=np.int32))
+    loss_dis += F.sigmoid_cross_entropy(y, xp.zeros_like(y.data, dtype=np.int32))
 
     dis.cleargrads()
     loss_dis.backward()
     optimizer_dis.update()
 
-    return loss_gen_data, float(loss_dis.data)
+    return float(loss_gen.data), float(loss_dis.data)
 
-def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=10, save_epoch=1, batch_size=64, margin=20, out_image_dir=None, clip_rect=None):
+def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=10, save_epoch=1, batch_size=64, out_image_dir=None, clip_rect=None):
     xp = gen1.xp
     out_image_row_num = 10
     out_image_col_num = 10
-    z_out_image =  xp.random.normal(0, 1, (out_image_row_num * out_image_col_num, latent_size)).astype(np.float32)
-    z_out_image = z_out_image / (xp.linalg.norm(z_out_image, axis=1, keepdims=True) + 1e-12)
+    z_out_image =  xp.random.uniform(-1, 1, (out_image_row_num * out_image_col_num, latent_size)).astype(np.float32)
     x_batch = np.zeros((batch_size, 3, image_size, image_size), dtype=np.float32)
     iterator = chainer.iterators.SerialIterator(images, batch_size)
     sum_loss_gen = 0
     sum_loss_dis = 0
     num_loss = 0
     last_clock = time.clock()
+    iteration = 1
     for batch_images in iterator:
         for j, image in enumerate(batch_images):
             with io.BytesIO(image) as b:
@@ -94,10 +88,26 @@ def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, outp
                 pixels = np.asarray(pixels.resize((image_size, image_size)), dtype=np.float32)
                 pixels = pixels.transpose((2, 0, 1))
                 x_batch[j,...] = pixels / 127.5 - 1
-        loss_gen, loss_dis = update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch, margin)
+        loss_gen, loss_dis = update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch)
         sum_loss_gen += loss_gen
         sum_loss_dis += loss_dis
+        loss_gen, loss_dis = update(gen1, gen2, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=True)
         num_loss += 1
+        if iteration % 100 == 0:
+            if out_image_dir is not None:
+                image = np.zeros((out_image_row_num * out_image_col_num, 3, image_size, image_size), dtype=np.uint8)
+                for i in six.moves.range(out_image_row_num):
+                    with chainer.no_backprop_mode():
+                        begin_index = i * out_image_col_num
+                        end_index = (i + 1) * out_image_col_num
+                        sub_image = gen2(gen1(z_out_image[begin_index:end_index], train=False), train=False).data
+                        sub_image = ((cuda.to_cpu(sub_image) + 1) * 127.5)
+                        image[begin_index:end_index, ...] = sub_image.clip(0, 255).astype(np.uint8)
+                        del sub_image
+                image = image.reshape(out_image_row_num, out_image_col_num, 3, image_size, image_size)
+                image = image.transpose((0, 3, 1, 4, 2))
+                image = image.reshape((out_image_row_num * image_size, out_image_col_num * image_size, 3))
+                Image.fromarray(image).save(os.path.join(out_image_dir, '{0:04d}_{1:06d}.png'.format(iterator.epoch, iteration)))
         if iterator.is_new_epoch:
             epoch = iterator.epoch
             current_clock = time.clock()
@@ -121,6 +131,7 @@ def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, outp
                             sub_image = gen2(gen1(z_out_image[begin_index:end_index], train=False), train=False).data
                             sub_image = ((cuda.to_cpu(sub_image) + 1) * 127.5)
                             image[begin_index:end_index, ...] = sub_image.clip(0, 255).astype(np.uint8)
+                            del sub_image
                     image = image.reshape(out_image_row_num, out_image_col_num, 3, image_size, image_size)
                     image = image.transpose((0, 3, 1, 4, 2))
                     image = image.reshape((out_image_row_num * image_size, out_image_col_num * image_size, 3))
@@ -129,6 +140,9 @@ def train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, epoch_num, outp
                 serializers.save_npz('{0}_{1:03d}.gen.state'.format(output_path, epoch), optimizer_gen)
                 serializers.save_npz('{0}_{1:03d}.dis.model'.format(output_path, epoch), dis)
                 serializers.save_npz('{0}_{1:03d}.dis.state'.format(output_path, epoch), optimizer_dis)
+            if iterator.epoch >= epoch_num:
+                break
+        iteration += 1
 
 def main():
     args = parse_args()
@@ -148,9 +162,9 @@ def main():
         gen2.to_gpu(device_id)
         dis.to_gpu(device_id)
 
-    optimizer_gen = optimizers.Adam(alpha=0.001)
+    optimizer_gen = optimizers.Adam(alpha=0.0002, beta1=0.5)
     optimizer_gen.setup(gen2)
-    optimizer_dis = optimizers.Adam(alpha=0.001)
+    optimizer_dis = optimizers.Adam(alpha=0.0002, beta1=0.5)
     optimizer_dis.setup(dis)
 
     serializers.load_npz(args.stack1 + '.gen.model', gen1)
@@ -174,7 +188,7 @@ def main():
     with open(args.dataset, 'rb') as f:
         images = pickle.load(f)
 
-    train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, args.epoch, batch_size=args.batch_size, margin=args.margin, save_epoch=args.save_epoch, lr_decay=args.lr_decay, output_path=args.output, out_image_dir=args.out_image_dir, clip_rect=clip_rect)
+    train(gen1, gen2, dis, optimizer_gen, optimizer_dis, images, args.epoch, batch_size=args.batch_size, save_epoch=args.save_epoch, lr_decay=args.lr_decay, output_path=args.output, out_image_dir=args.out_image_dir, clip_rect=clip_rect)
 
 if __name__ == '__main__':
     main()

@@ -45,7 +45,7 @@ def main():
         gen1.to_gpu(device_id)
 
     out_vector_path = None
-    np.random.seed(1)
+    np.random.seed(2)
     if args.vector_file1 and args.vector_index1 >= 0 and args.vector_file2 and args.vector_index2 >= 0:
         with open(args.vector_file1, 'rb') as f:
             z = np.load(f)
@@ -57,9 +57,9 @@ def main():
         z = (1 - w) * z1 + w * z2
         z = z / (np.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
     else:
-        z = np.random.normal(0, 1, (100, latent_size)).astype(np.float32)
+        z = np.random.uniform(-1, 1, (100, latent_size)).astype(np.float32)
         out_vector_path = '{}.npy'.format(args.output)
-        z = z / (np.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
+#        z = z / (np.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
 
     with chainer.no_backprop_mode():
         if device_id is None:

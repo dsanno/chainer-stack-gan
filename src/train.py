@@ -22,7 +22,6 @@ def parse_args():
     parser.add_argument('--dataset', '-d', default='dataset/images.pkl', type=str, help='dataset file path')
     parser.add_argument('--gpu', '-g', default=-1, type=int, help='GPU ID (negative value indicates CPU)')
     parser.add_argument('--batch-size', '-b', default=64, type=int, help='batch size')
-    parser.add_argument('--margin', '-m', default=20, type=float, help='margin of loss function')
     parser.add_argument('--input', '-i', default=None, type=str, help='input model file path without extension')
     parser.add_argument('--output', '-o', required=True, type=str, help='output model file path without extension')
     parser.add_argument('--epoch', '-e', default=50, type=int, help='number of epochs')
@@ -32,28 +31,28 @@ def parse_args():
     parser.add_argument('--clip-rect', default=None, type=str, help='clip rect: left,top,width,height')
     return parser.parse_args()
 
-def update(gen, dis, optimizer_gen, optimizer_dis, x_batch, margin):
+def update(gen, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=False):
     xp = gen.xp
     batch_size = len(x_batch)
 
     # from generated image
-    z = xp.random.normal(0, 1, (batch_size, latent_size)).astype(np.float32)
-    z = z / (xp.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
+    z = xp.random.uniform(-1, 1, (batch_size, latent_size)).astype(np.float32)
     x_gen = gen(z)
-    total_size = np.prod(x_gen.shape)
-    y_gen, h_gen = dis(x_gen)
-    h_gen = F.normalize(F.reshape(h_gen, (batch_size, -1)))
-    similarity = F.sum(F.matmul(h_gen, h_gen, transb=True)) / (batch_size * batch_size)
-    loss_gen = F.mean_squared_error(x_gen, y_gen) + 0.1 * similarity
-    loss_dis = F.sum(F.relu(margin * margin - F.batch_l2_norm_squared(x_gen - y_gen))) / total_size
-    # from real image
-    x = xp.asarray(x_batch)
-    y, h = dis(x)
-    loss_dis += F.mean_squared_error(x, y)
+    y_gen = dis(x_gen)
+    loss_gen = F.sigmoid_cross_entropy(y_gen, xp.zeros_like(y_gen.data, dtype=np.int32))
 
     gen.cleargrads()
     loss_gen.backward()
     optimizer_gen.update()
+
+    if only_update_gen:
+        return float(loss_gen.data), 0
+
+    # from real image
+    x = xp.asarray(x_batch)
+    y = dis(x)
+    loss_dis = F.sigmoid_cross_entropy(y_gen, xp.ones_like(y_gen.data, dtype=np.int32))
+    loss_dis += F.sigmoid_cross_entropy(y, xp.zeros_like(y.data, dtype=np.int32))
 
     dis.cleargrads()
     loss_dis.backward()
@@ -61,12 +60,11 @@ def update(gen, dis, optimizer_gen, optimizer_dis, x_batch, margin):
 
     return float(loss_gen.data), float(loss_dis.data)
 
-def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=10, save_epoch=1, batch_size=64, margin=20, out_image_dir=None, clip_rect=None):
+def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=10, save_epoch=1, batch_size=64, out_image_dir=None, clip_rect=None):
     xp = gen.xp
     out_image_row_num = 10
     out_image_col_num = 10
-    z_out_image = xp.random.normal(0, 1, (out_image_row_num * out_image_col_num, latent_size)).astype(np.float32)
-    z_out_image = z_out_image / (xp.linalg.norm(z_out_image, axis=1, keepdims=True) + 1e-12)
+    z_out_image = xp.random.uniform(-1, 1, (out_image_row_num * out_image_col_num, latent_size)).astype(np.float32)
     z_out_image =  chainer.Variable(z_out_image, volatile=True)
     x_batch = np.zeros((batch_size, 3, image_size, image_size), dtype=np.float32)
     iterator = chainer.iterators.SerialIterator(images, batch_size)
@@ -74,6 +72,7 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
     sum_loss_dis = 0
     num_loss = 0
     last_clock = time.clock()
+    iteration = 1
     for batch_images in iterator:
         for j, image in enumerate(batch_images):
             with io.BytesIO(image) as b:
@@ -85,23 +84,36 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
                 pixels = np.asarray(pixels.resize((image_size, image_size)), dtype=np.float32)
                 pixels = pixels.transpose((2, 0, 1))
                 x_batch[j,...] = pixels / 127.5 - 1
-        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch, margin)
+        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch)
+        sum_loss_gen += loss_gen
+        sum_loss_dis += loss_dis
+        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=True)
         sum_loss_gen += loss_gen
         sum_loss_dis += loss_dis
         num_loss += 1
+        if iteration % 100 == 0:
+            if out_image_dir is not None:
+                image = gen(z_out_image, train=False).data
+                image = ((cuda.to_cpu(image) + 1) * 127.5)
+                image = image.clip(0, 255).astype(np.uint8)
+                image = image.reshape(out_image_row_num, out_image_col_num, 3, image_size, image_size)
+                image = image.transpose((0, 3, 1, 4, 2))
+                image = image.reshape((out_image_row_num * image_size, out_image_col_num * image_size, 3))
+                Image.fromarray(image).save(os.path.join(out_image_dir, '{0:04d}_{1:06d}.png'.format(iterator.epoch, iteration)))
         if iterator.is_new_epoch:
             epoch = iterator.epoch
             current_clock = time.clock()
             print('epoch {} done {}s elapsed'.format(epoch, current_clock - last_clock))
-            print('gen loss: {}'.format(sum_loss_gen / num_loss))
+            print('gen loss: {}'.format(sum_loss_gen / num_loss / 2))
             print('dis loss: {}'.format(sum_loss_dis / num_loss))
             last_clock = current_clock
             sum_loss_gen = 0
             sum_loss_dis = 0
-            num_loss = 1
+            num_loss = 0
             if iterator.epoch % lr_decay == 0:
                 optimizer_gen.alpha *= 0.5
                 optimizer_dis.alpha *= 0.5
+
             if iterator.epoch % save_epoch == 0:
                 if out_image_dir is not None:
                     image = gen(z_out_image, train=False).data
@@ -111,19 +123,13 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
                     image = image.transpose((0, 3, 1, 4, 2))
                     image = image.reshape((out_image_row_num * image_size, out_image_col_num * image_size, 3))
                     Image.fromarray(image).save(os.path.join(out_image_dir, '{0:04d}.png'.format(epoch)))
-
-                    image = dis(xp.asarray(x_batch), train=False)[0].data
-                    image = ((cuda.to_cpu(image) + 1) * 127.5)
-                    image = image.clip(0, 255).astype(np.uint8)
-                    image = image.reshape(8, 8, 3, image_size, image_size)
-                    image = image.transpose((0, 3, 1, 4, 2))
-                    image = image.reshape((8 * image_size, 8 * image_size, 3))
-                    Image.fromarray(image).save(os.path.join(out_image_dir, '{0:04d}_dis.png'.format(epoch)))
-
                 serializers.save_npz('{0}_{1:03d}.gen.model'.format(output_path, epoch), gen)
                 serializers.save_npz('{0}_{1:03d}.gen.state'.format(output_path, epoch), optimizer_gen)
                 serializers.save_npz('{0}_{1:03d}.dis.model'.format(output_path, epoch), dis)
                 serializers.save_npz('{0}_{1:03d}.dis.state'.format(output_path, epoch), optimizer_dis)
+            if iterator.epoch >= epoch_num:
+                break
+        iteration += 1
 
 def main():
     args = parse_args()
@@ -141,10 +147,12 @@ def main():
         gen.to_gpu(device_id)
         dis.to_gpu(device_id)
 
-    optimizer_gen = optimizers.Adam(alpha=0.001)
+    optimizer_gen = optimizers.Adam(alpha=0.0001, beta1=0.5)
     optimizer_gen.setup(gen)
-    optimizer_dis = optimizers.Adam(alpha=0.001)
+    optimizer_gen.add_hook(chainer.optimizer.WeightDecay(0.00001))
+    optimizer_dis = optimizers.Adam(alpha=0.0001, beta1=0.5)
     optimizer_dis.setup(dis)
+    optimizer_dis.add_hook(chainer.optimizer.WeightDecay(0.00001))
 
     if args.input != None:
         serializers.load_npz(args.input + '.gen.model', gen)
@@ -166,7 +174,7 @@ def main():
     with open(args.dataset, 'rb') as f:
         images = pickle.load(f)
 
-    train(gen, dis, optimizer_gen, optimizer_dis, images, args.epoch, batch_size=args.batch_size, margin=args.margin, save_epoch=args.save_epoch, lr_decay=args.lr_decay, output_path=args.output, out_image_dir=args.out_image_dir, clip_rect=clip_rect)
+    train(gen, dis, optimizer_gen, optimizer_dis, images, args.epoch, batch_size=args.batch_size, save_epoch=args.save_epoch, lr_decay=args.lr_decay, output_path=args.output, out_image_dir=args.out_image_dir, clip_rect=clip_rect)
 
 if __name__ == '__main__':
     main()
