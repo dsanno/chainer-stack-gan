@@ -28,7 +28,7 @@ $ python src/convert_dataset.py ../images dataset/images.pkl
 Example:
 
 ```
-$ python src/train.py -d dataset/images.pkl -o model/stage1 -g 0 --out-image-dir image/stage1 --clip-rect 25,55,128,128
+$ python src/train.py -d dataset/images.pkl -o model/stage1 -g 0 -e 12 --lr-decay 2 --out-image-dir image/stage1 --clip-rect 25,55,128,128
 ```
 
 ## Train Stage-II model
@@ -36,7 +36,7 @@ $ python src/train.py -d dataset/images.pkl -o model/stage1 -g 0 --out-image-dir
 Example:
 
 ```
-$ python src/train.py model/stage1_050 -d dataset/images.pkl -o model/stage2 -g 0 --out-image-dir image/stage2 --clip-rect 25,55,128,128
+$ python src/train.py model/stage1_012 -d dataset/images.pkl -o model/stage2 -g 0 -e 12 --lr-decay 2 --out-image-dir image/stage2 --clip-rect 25,55,128,128
 ```
 
 ## Generate image
@@ -44,14 +44,14 @@ $ python src/train.py model/stage1_050 -d dataset/images.pkl -o model/stage2 -g 
 Example:
 
 ```
-$ python src/generate2.py model/stage1_050.gen.model model\stage2_050.gen.model image\generated -g 0
+$ python src/generate2.py model/stage1_012.gen.model model\stage2_012.gen.model image\generated -g 0
 ```
 
 # Differences from original paper
 
 * Text to image synthesis is not implemented.  
 Input of generator is 100-dimension latent vector.
-* Use [Energy-based GAN](https://arxiv.org/abs/1609.03126) instead of normal DCGAN.
+* Use Minibatch discriminator described in [Improved Techniques for Training GANs](https://arxiv.org/abs/1606.03498).
 * Output image size of Stage-II GAN is only 128 x 128.
 
 # License
