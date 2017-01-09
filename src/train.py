@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument('--clip-rect', default=None, type=str, help='clip rect: left,top,width,height')
     return parser.parse_args()
 
-def update(gen, dis, optimizer_gen, optimizer_dis, x_batch, threshold=1.0):
+def update(gen, dis, optimizer_gen, optimizer_dis, x_batch):
     xp = gen.xp
     batch_size = len(x_batch)
 
@@ -41,47 +41,15 @@ def update(gen, dis, optimizer_gen, optimizer_dis, x_batch, threshold=1.0):
     y_gen = dis(x_gen)
     loss_gen = F.sigmoid_cross_entropy(y_gen, xp.zeros_like(y_gen.data, dtype=np.int32))
 
-    gen.cleargrads()
-    loss_gen.backward()
-    optimizer_gen.update()
-
-    if loss_gen.data >= threshold:
-        return float(loss_gen.data), 0
-
     # from real image
     x = xp.asarray(x_batch)
     y = dis(x)
     loss_dis = F.sigmoid_cross_entropy(y_gen, xp.ones_like(y_gen.data, dtype=np.int32))
     loss_dis += F.sigmoid_cross_entropy(y, xp.zeros_like(y.data, dtype=np.int32))
 
-    dis.cleargrads()
-    loss_dis.backward()
-    optimizer_dis.update()
-
-    return float(loss_gen.data), float(loss_dis.data)
-
-def update_old(gen, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=False):
-    xp = gen.xp
-    batch_size = len(x_batch)
-
-    # from generated image
-    z = xp.random.uniform(-1, 1, (batch_size, latent_size)).astype(np.float32)
-    x_gen = gen(z)
-    y_gen = dis(x_gen)
-    loss_gen = F.sigmoid_cross_entropy(y_gen, xp.zeros_like(y_gen.data, dtype=np.int32))
-
     gen.cleargrads()
     loss_gen.backward()
     optimizer_gen.update()
-
-    if only_update_gen:
-        return float(loss_gen.data), 0
-
-    # from real image
-    x = xp.asarray(x_batch)
-    y = dis(x)
-    loss_dis = F.sigmoid_cross_entropy(y_gen, xp.ones_like(y_gen.data, dtype=np.int32))
-    loss_dis += F.sigmoid_cross_entropy(y, xp.zeros_like(y.data, dtype=np.int32))
 
     dis.cleargrads()
     loss_dis.backward()
@@ -97,7 +65,6 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
     z_out_image =  chainer.Variable(z_out_image, volatile=True)
     x_batch = np.zeros((batch_size, 3, image_size, image_size), dtype=np.float32)
     iterator = chainer.iterators.SerialIterator(images, batch_size)
-    loss_gen = 0
     sum_loss_gen = 0
     sum_loss_dis = 0
     num_loss_gen = 0
@@ -115,12 +82,12 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
                 pixels = np.asarray(pixels.resize((image_size, image_size), Image.BILINEAR), dtype=np.float32)
                 pixels = pixels.transpose((2, 0, 1))
                 x_batch[j,...] = pixels / 127.5 - 1
-        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch, 0.8)
+        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch)
         sum_loss_gen += loss_gen
         num_loss_gen += 1
-        if loss_dis > 0:
-            sum_loss_dis += loss_dis
-            num_loss_dis += 1
+        sum_loss_dis += loss_dis
+        num_loss_dis += 1
+
         if iteration % 100 == 0:
             if out_image_dir is not None:
                 image = gen(z_out_image, train=False).data
