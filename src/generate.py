@@ -55,7 +55,6 @@ def main():
             z2 = z[args.vector_index2]
         w = np.arange(10).astype(np.float32).reshape((-1, 1)) / 9
         z = (1 - w) * z1 + w * z2
-        z = z / (np.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
     else:
         z = np.random.uniform(-1, 1, (100, latent_size)).astype(np.float32)
         out_vector_path = '{}.npy'.format(args.output)
