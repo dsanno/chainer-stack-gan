@@ -28,7 +28,7 @@ $ python src/convert_dataset.py ../images dataset/images.pkl
 Example:
 
 ```
-$ python src/train.py -d dataset/images.pkl -o model/stage1 -g 0 -e 12 --lr-decay 2 --out-image-dir image/stage1 --clip-rect 25,55,128,128
+$ python src/train.py -d dataset/images.pkl -o model/stage1 -g 0 -e 5 --lr-decay 2 --out-image-dir image/stage1 --clip-rect 17,47,144,144
 ```
 
 ## Train Stage-II model
@@ -36,7 +36,7 @@ $ python src/train.py -d dataset/images.pkl -o model/stage1 -g 0 -e 12 --lr-deca
 Example:
 
 ```
-$ python src/train.py model/stage1_012 -d dataset/images.pkl -o model/stage2 -g 0 -e 12 --lr-decay 2 --out-image-dir image/stage2 --clip-rect 25,55,128,128
+$ python src/train.py model/stage1_005 -d dataset/images.pkl -o model/stage2 -g 0 -e 5 --lr-decay 1 --out-image-dir image/stage2 --clip-rect 17,47,144,144
 ```
 
 ## Generate image
@@ -44,7 +44,7 @@ $ python src/train.py model/stage1_012 -d dataset/images.pkl -o model/stage2 -g 
 Example:
 
 ```
-$ python src/generate2.py model/stage1_012.gen.model model\stage2_012.gen.model image\generated -g 0
+$ python src/generate2.py model/stage1_005.gen.model model\stage2_005.gen.model image\generated -g 0
 ```
 
 # Differences from original paper
