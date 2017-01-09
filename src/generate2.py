@@ -61,9 +61,7 @@ def main():
         z = (1 - w) * z1 + w * z2
         z = z / (np.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
     else:
-        z = np.random.normal(0, 1, (100, latent_size)).astype(np.float32)
-        z = z / (np.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
-        out_vector_path = '{}.npy'.format(args.output)
+        z = np.random.uniform(-1, 1, (100, latent_size)).astype(np.float32)
 
 
     with chainer.no_backprop_mode():

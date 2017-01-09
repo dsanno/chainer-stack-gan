@@ -31,7 +31,36 @@ def parse_args():
     parser.add_argument('--clip-rect', default=None, type=str, help='clip rect: left,top,width,height')
     return parser.parse_args()
 
-def update(gen, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=False):
+def update(gen, dis, optimizer_gen, optimizer_dis, x_batch, threshold=1.0):
+    xp = gen.xp
+    batch_size = len(x_batch)
+
+    # from generated image
+    z = xp.random.uniform(-1, 1, (batch_size, latent_size)).astype(np.float32)
+    x_gen = gen(z)
+    y_gen = dis(x_gen)
+    loss_gen = F.sigmoid_cross_entropy(y_gen, xp.zeros_like(y_gen.data, dtype=np.int32))
+
+    gen.cleargrads()
+    loss_gen.backward()
+    optimizer_gen.update()
+
+    if loss_gen.data >= threshold:
+        return float(loss_gen.data), 0
+
+    # from real image
+    x = xp.asarray(x_batch)
+    y = dis(x)
+    loss_dis = F.sigmoid_cross_entropy(y_gen, xp.ones_like(y_gen.data, dtype=np.int32))
+    loss_dis += F.sigmoid_cross_entropy(y, xp.zeros_like(y.data, dtype=np.int32))
+
+    dis.cleargrads()
+    loss_dis.backward()
+    optimizer_dis.update()
+
+    return float(loss_gen.data), float(loss_dis.data)
+
+def update_old(gen, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=False):
     xp = gen.xp
     batch_size = len(x_batch)
 
@@ -68,9 +97,11 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
     z_out_image =  chainer.Variable(z_out_image, volatile=True)
     x_batch = np.zeros((batch_size, 3, image_size, image_size), dtype=np.float32)
     iterator = chainer.iterators.SerialIterator(images, batch_size)
+    loss_gen = 0
     sum_loss_gen = 0
     sum_loss_dis = 0
-    num_loss = 0
+    num_loss_gen = 0
+    num_loss_dis = 0
     last_clock = time.clock()
     iteration = 1
     for batch_images in iterator:
@@ -81,16 +112,15 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
                     offset_left = np.random.randint(-4, 5)
                     offset_top = np.random.randint(-4, 5)
                     pixels = pixels.crop((clip_rect[0] + offset_left, clip_rect[1] + offset_top) + clip_rect[2:])
-                pixels = np.asarray(pixels.resize((image_size, image_size)), dtype=np.float32)
+                pixels = np.asarray(pixels.resize((image_size, image_size), Image.BILINEAR), dtype=np.float32)
                 pixels = pixels.transpose((2, 0, 1))
                 x_batch[j,...] = pixels / 127.5 - 1
-        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch)
+        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch, 0.8)
         sum_loss_gen += loss_gen
-        sum_loss_dis += loss_dis
-        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch, only_update_gen=True)
-        sum_loss_gen += loss_gen
-        sum_loss_dis += loss_dis
-        num_loss += 1
+        num_loss_gen += 1
+        if loss_dis > 0:
+            sum_loss_dis += loss_dis
+            num_loss_dis += 1
         if iteration % 100 == 0:
             if out_image_dir is not None:
                 image = gen(z_out_image, train=False).data
@@ -104,12 +134,13 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
             epoch = iterator.epoch
             current_clock = time.clock()
             print('epoch {} done {}s elapsed'.format(epoch, current_clock - last_clock))
-            print('gen loss: {}'.format(sum_loss_gen / num_loss / 2))
-            print('dis loss: {}'.format(sum_loss_dis / num_loss))
+            print('gen loss: {}'.format(sum_loss_gen / (num_loss_gen + 1e-5)))
+            print('dis loss: {}'.format(sum_loss_dis / (num_loss_dis + 1e-5)))
             last_clock = current_clock
             sum_loss_gen = 0
             sum_loss_dis = 0
-            num_loss = 0
+            num_loss_gen = 0
+            num_loss_dis = 0
             if iterator.epoch % lr_decay == 0:
                 optimizer_gen.alpha *= 0.5
                 optimizer_dis.alpha *= 0.5
@@ -147,10 +178,10 @@ def main():
         gen.to_gpu(device_id)
         dis.to_gpu(device_id)
 
-    optimizer_gen = optimizers.Adam(alpha=0.0001, beta1=0.5)
+    optimizer_gen = optimizers.Adam(alpha=0.0002, beta1=0.5)
     optimizer_gen.setup(gen)
     optimizer_gen.add_hook(chainer.optimizer.WeightDecay(0.00001))
-    optimizer_dis = optimizers.Adam(alpha=0.0001, beta1=0.5)
+    optimizer_dis = optimizers.Adam(alpha=0.0002, beta1=0.5)
     optimizer_dis.setup(dis)
     optimizer_dis.add_hook(chainer.optimizer.WeightDecay(0.00001))
 

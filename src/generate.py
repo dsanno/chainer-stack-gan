@@ -59,7 +59,6 @@ def main():
     else:
         z = np.random.uniform(-1, 1, (100, latent_size)).astype(np.float32)
         out_vector_path = '{}.npy'.format(args.output)
-#        z = z / (np.linalg.norm(z, axis=1, keepdims=True) + 1e-12)
 
     with chainer.no_backprop_mode():
         if device_id is None:
