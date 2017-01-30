@@ -137,13 +137,11 @@ class Discriminator1(chainer.Chain):
         initialW = chainer.initializers.Normal(0.02)
         super(Discriminator1, self).__init__(
             down=DownSampling(64, 3, 4, 1024),
-            bdis=MinibatchDiscriminator(4 * 4 * 1024, 50, 5),
-            fc=L.Linear(4 * 4 * 1024 + 50, 1, initialW=initialW),
+            fc=L.Linear(4 * 4 * 1024, 1, initialW=initialW),
         )
 
     def __call__(self, x, train=True):
         h = self.down(x, train)
-        h = self.bdis(h)
         y = self.fc(h)
         return y
 
@@ -168,12 +166,10 @@ class Discriminator2(chainer.Chain):
         initialW = chainer.initializers.Normal(0.02)
         super(Discriminator2, self).__init__(
             down=DownSampling(128, 3, 4, 1024),
-            bdis=MinibatchDiscriminator(4 * 4 * 1024, 50, 5),
-            fc=L.Linear(4 * 4 * 1024 + 50, 1, initialW=initialW),
+            fc=L.Linear(4 * 4 * 1024, 1, initialW=initialW),
         )
 
     def __call__(self, x, train=True):
         h = self.down(x, train)
-        h = self.bdis(h)
         y = self.fc(h)
         return y

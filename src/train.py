@@ -17,6 +17,20 @@ import net
 latent_size = 100
 image_size = 64
 
+
+class WeightClipping(object):
+    name = 'WeightClipping'
+
+    def __init__(self, bound):
+        self.bound = bound
+
+    def __call__(self, opt):
+        xp = opt.target.xp
+        for param in opt.target.params():
+            data = param.data
+            with cuda.get_device(data):
+                xp.clip(data, -self.bound, self.bound, out=data)
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Stage-1 GAN trainer')
     parser.add_argument('--dataset', '-d', default='dataset/images.pkl', type=str, help='dataset file path')
@@ -26,7 +40,7 @@ def parse_args():
     parser.add_argument('--output', '-o', required=True, type=str, help='output model file path without extension')
     parser.add_argument('--epoch', '-e', default=50, type=int, help='number of epochs')
     parser.add_argument('--save-epoch', default=1, type=int, help='number of epochs for saving intervals')
-    parser.add_argument('--lr-decay', default=10, type=int, help='number of epochs for learning rate decay')
+    parser.add_argument('--lr-decay', default=0, type=int, help='number of epochs for learning rate decay')
     parser.add_argument('--out-image-dir', default=None, type=str, help='output directory to output images')
     parser.add_argument('--clip-rect', default=None, type=str, help='clip rect: left,top,width,height')
     return parser.parse_args()
@@ -57,7 +71,42 @@ def update(gen, dis, optimizer_gen, optimizer_dis, x_batch):
 
     return float(loss_gen.data), float(loss_dis.data)
 
-def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=10, save_epoch=1, batch_size=64, out_image_dir=None, clip_rect=None):
+def update_dis(gen, dis, optimizer_dis, x_batch):
+    xp = gen.xp
+    batch_size = len(x_batch)
+
+    # from generated image
+    z = xp.random.uniform(-1, 1, (batch_size, latent_size)).astype(np.float32)
+    x_gen = gen(z)
+    y_gen = dis(x_gen)
+
+    # from real image
+    x = xp.asarray(x_batch)
+    y = dis(x)
+    loss_dis = -F.sum(F.square(y - y_gen)) / batch_size
+
+    dis.cleargrads()
+    loss_dis.backward()
+    optimizer_dis.update()
+
+    return float(loss_dis.data)
+
+def update_gen(gen, dis, optimizer_gen, batch_size):
+    xp = gen.xp
+
+    # from generated image
+    z = xp.random.uniform(-1, 1, (batch_size, latent_size)).astype(np.float32)
+    x_gen = gen(z)
+    y_gen = dis(x_gen)
+    loss_gen = F.sum(F.square(y_gen)) / batch_size
+
+    gen.cleargrads()
+    loss_gen.backward()
+    optimizer_gen.update()
+
+    return float(loss_gen.data)
+
+def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path, lr_decay=0, save_epoch=1, batch_size=64, out_image_dir=None, clip_rect=None):
     xp = gen.xp
     out_image_row_num = 10
     out_image_col_num = 10
@@ -70,6 +119,7 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
     num_loss_gen = 0
     num_loss_dis = 0
     last_clock = time.clock()
+    critic_interval = 5
     iteration = 1
     for batch_images in iterator:
         for j, image in enumerate(batch_images):
@@ -82,11 +132,13 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
                 pixels = np.asarray(pixels.resize((image_size, image_size), Image.BILINEAR), dtype=np.float32)
                 pixels = pixels.transpose((2, 0, 1))
                 x_batch[j,...] = pixels / 127.5 - 1
-        loss_gen, loss_dis = update(gen, dis, optimizer_gen, optimizer_dis, x_batch)
-        sum_loss_gen += loss_gen
-        num_loss_gen += 1
+        loss_dis = update_dis(gen, dis, optimizer_dis, x_batch)
         sum_loss_dis += loss_dis
         num_loss_dis += 1
+        if iteration % critic_interval == 0:
+            loss_gen = update_gen(gen, dis, optimizer_gen, batch_size)
+            sum_loss_gen += loss_gen
+            num_loss_gen += 1
 
         if iteration % 100 == 0:
             if out_image_dir is not None:
@@ -108,9 +160,9 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
             sum_loss_dis = 0
             num_loss_gen = 0
             num_loss_dis = 0
-            if iterator.epoch % lr_decay == 0:
-                optimizer_gen.alpha *= 0.5
-                optimizer_dis.alpha *= 0.5
+            if lr_decay > 0 and iterator.epoch % lr_decay == 0:
+                optimizer_gen.lr *= 0.5
+                optimizer_dis.lr *= 0.5
 
             if iterator.epoch % save_epoch == 0:
                 if out_image_dir is not None:
@@ -145,12 +197,11 @@ def main():
         gen.to_gpu(device_id)
         dis.to_gpu(device_id)
 
-    optimizer_gen = optimizers.Adam(alpha=0.0002, beta1=0.5)
+    optimizer_gen = optimizers.RMSprop(lr=0.00005)
     optimizer_gen.setup(gen)
-    optimizer_gen.add_hook(chainer.optimizer.WeightDecay(0.00001))
-    optimizer_dis = optimizers.Adam(alpha=0.0002, beta1=0.5)
+    optimizer_dis = optimizers.RMSprop(lr=0.00005)
     optimizer_dis.setup(dis)
-    optimizer_dis.add_hook(chainer.optimizer.WeightDecay(0.00001))
+    optimizer_dis.add_hook(WeightClipping(0.01))
 
     if args.input != None:
         serializers.load_npz(args.input + '.gen.model', gen)
