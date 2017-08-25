@@ -124,6 +124,8 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
                 serializers.save_npz('{0}_{1:03d}.gen.state'.format(output_path, epoch), optimizer_gen)
                 serializers.save_npz('{0}_{1:03d}.dis.model'.format(output_path, epoch), dis)
                 serializers.save_npz('{0}_{1:03d}.dis.state'.format(output_path, epoch), optimizer_dis)
+            if iterator.epoch >= epoch_num:
+                break
 
 def main():
     args = parse_args()
