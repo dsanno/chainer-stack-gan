@@ -98,7 +98,7 @@ def train(gen, dis, optimizer_gen, optimizer_dis, images, epoch_num, output_path
             last_clock = current_clock
             sum_loss_gen = 0
             sum_loss_dis = 0
-            num_loss = 1
+            num_loss = 0
             if iterator.epoch % lr_decay == 0:
                 optimizer_gen.alpha *= 0.5
                 optimizer_dis.alpha *= 0.5
